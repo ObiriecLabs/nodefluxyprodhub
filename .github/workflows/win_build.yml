@@ -1,0 +1,94 @@
+# ══════════════════════════════════════════════════════════════════════
+#  NODEFLUXY PRODHUB — GitHub Actions: Build Windows .exe
+#  Obiriec Labs © 2026
+#
+#  Trigger: workflow_dispatch da ship_mac.sh (o manuale)
+#
+#  Segreti richiesti (Settings → Secrets → Actions):
+#    PRIVATE_REPO_TOKEN — PAT con scope "repo" su nodefluxyprodhub-backup
+# ══════════════════════════════════════════════════════════════════════
+
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versione (es: 1.2)'
+        required: true
+
+jobs:
+  build-windows:
+    name: Build NODEFLUXYPRODHUB.exe (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      # ── Checkout sorgente privato ─────────────────────────────────
+      - name: Checkout private source
+        uses: actions/checkout@v4.2.2
+        with:
+          repository: ObiriecLabs/nodefluxyprodhub-backup
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+
+      # ── Python ────────────────────────────────────────────────────
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5.5.0
+        with:
+          python-version: '3.11'
+
+      # ── Dipendenze ────────────────────────────────────────────────
+      - name: Installa dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      # ── Build .exe ────────────────────────────────────────────────
+      - name: Build exe con PyInstaller
+        run: |
+          python -m PyInstaller NODEFLUXYPRODHUB.spec --noconfirm --clean
+
+      # ── Pacchettizza installer ────────────────────────────────────
+      - name: Crea zip installer
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.inputs.version }}"
+          $src = "build\dist\NODEFLUXYPRODHUB"
+          $out = "NODEFLUXYPRODHUB-${ver}-Setup.exe"
+          # Se non hai NSIS, usa zip come distribuzione alternativa
+          if (Test-Path "build\dist\NODEFLUXYPRODHUB.exe") {
+            Copy-Item "build\dist\NODEFLUXYPRODHUB.exe" $out
+          } else {
+            Compress-Archive -Path "$src\*" -DestinationPath "NODEFLUXYPRODHUB-${ver}-win.zip"
+            Rename-Item "NODEFLUXYPRODHUB-${ver}-win.zip" $out
+          }
+          echo "EXE_PATH=$out" >> $env:GITHUB_ENV
+
+      # ── Upload su GitHub Release ──────────────────────────────────
+      - name: Upload su Release pubblica
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          ver="${{ github.event.inputs.version }}"
+          tag="v${ver}"
+          repo="ObiriecLabs/nodefluxyprodhub"
+          asset="NODEFLUXYPRODHUB-${ver}-Setup.exe"
+          stable="NODEFLUXYPRODHUB-Setup.exe"
+
+          # Copia con nome stabile
+          cp "$asset" "$stable"
+
+          # Carica su release esistente o creane una
+          if gh release view "$tag" --repo "$repo" &>/dev/null; then
+            gh release upload "$tag" --repo "$repo" --clobber "$asset" "$stable"
+          else
+            gh release create "$tag" \
+              --repo "$repo" \
+              --title "NODEFLUXY PRODHUB ${tag}" \
+              --notes "NODEFLUXY PRODHUB v${ver} — Windows build" \
+              "$asset" "$stable"
+          fi
+          echo "✓ Windows release caricata: $asset"
